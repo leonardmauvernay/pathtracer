@@ -16,7 +16,7 @@
 static std::default_random_engine engine[32];
 static std::uniform_real_distribution<double> uniform(0, 1);
 
-double sqr(double x) { return x * x; };
+double sqr(double x) { return x * x; }; 
 
 class Vector {
 public:
