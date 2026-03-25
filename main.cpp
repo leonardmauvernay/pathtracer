@@ -110,7 +110,7 @@ public:
       if (t >= 0) {
         P = ray.O + t * ray.u;
         N = P - C;
-		N.normalize();
+        N.normalize();
         return true;
       }
     }
@@ -151,22 +151,21 @@ public:
     // TODO (lab 1): iterate through the objects and check the intersections
     // with all of them, and keep the closest intersection, i.e., the one if
     // smallest positive value of t
-	double min_t = INT_MAX;
-	bool b = false;
+    double min_t = INT_MAX;
+    bool b = false;
 
     for (int i = 0; i < objects.size(); i++) {
-	  Vector P_t, N_t;
-	  double t_t;
+      Vector P_t, N_t;
+      double t_t;
       if (objects[i]->intersect(ray, P_t, t_t, N_t)) {
-		if (t_t < min_t){
-			P = P_t;
-			N = N_t;
-			min_t = t_t;
-			t = t_t;
-			object_id = i;
-			b = true;
-
-		}
+        if (t_t < min_t) {
+          P = P_t;
+          N = N_t;
+          min_t = t_t;
+          t = t_t;
+          object_id = i;
+          b = true;
+        }
       }
     }
     return b;
@@ -208,10 +207,24 @@ public:
       double a = light_intensity / (4 * M_PI * (v).norm2());
       Vector m = objects[object_id]->albedo / M_PI;
       double sa = std::max(0., dot(N, v / v.norm()));
-	  
-	  //Shadow
-	  double epsilon = 1e-5;   // advised by Xianjin GONG
-	  Ray shadow_test(P + epsilon * N, v);
+
+      // Shadow
+      double epsilon = 1e-5; // advised by Xianjin GONG
+      Vector P2 = P + epsilon * N;
+      Vector l_dir = light_position - P2;
+      Vector shadow_P, shadow_N;
+      double shadow_t;
+      int shadow_obj_id;
+
+      Ray shadow_ray(P2, l_dir);
+
+      bool s =
+          intersect(shadow_ray, shadow_P, shadow_t, shadow_N, shadow_obj_id);
+      Vector v2 = shadow_P - P2;
+
+      if (s && v2.norm2() <= l_dir.norm2()) {
+        return Vector(0, 0, 0);
+      }
 
       return a * m * sa;
       // TODO (lab 2) : add indirect lighting component with a recursive call
@@ -253,14 +266,12 @@ int main() {
 
   scene.addObject(&center_sphere);
 
-  
   scene.addObject(&wall_left);
   scene.addObject(&wall_right);
   scene.addObject(&wall_front);
   scene.addObject(&wall_behind);
   scene.addObject(&ceiling);
   scene.addObject(&floor);
-  
 
   std::vector<unsigned char> image(W * H * 3, 0);
 
