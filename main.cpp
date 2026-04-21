@@ -204,31 +204,62 @@ public:
 
       // test if there is a shadow by sending a new ray
       // if there is no shadow, compute the formula with dot products etc.
+      // TODO (lab 2) : add indirect lighting component with a recursive call
       Vector v = light_position - P;
       double a = light_intensity / (4 * M_PI * (v).norm2());
       Vector m = objects[object_id]->albedo / M_PI;
       double sa = std::max(0., dot(N, v / v.norm()));
 
-      // Shadow
       double epsilon = 1e-5; // advised by Xianjin GONG
       Vector P2 = P + epsilon * N;
       Vector l_dir = light_position - P2;
+      double l_dist2 = l_dir.norm2();
+      l_dir.normalize();
       Vector shadow_P, shadow_N;
       double shadow_t;
       int shadow_obj_id;
-
       Ray shadow_ray(P2, l_dir);
 
       bool s =
           intersect(shadow_ray, shadow_P, shadow_t, shadow_N, shadow_obj_id);
       Vector v2 = shadow_P - P2;
 
-      if (s && v2.norm2() <= l_dir.norm2()) {
-        return Vector(0, 0, 0);
+      Vector dir;
+      if (s && v2.norm2() <= l_dist2) {
+        dir = Vector(0, 0, 0);
+      } else {
+        dir = a * m * sa;
       }
 
-      return a * m * sa;
-      // TODO (lab 2) : add indirect lighting component with a recursive call
+      // indirect light part
+      double r1 = uniform(engine[0]);
+      double r2 = uniform(engine[0]);
+      double x = cos(2 * M_PI * r1) * sqrt(1 - r2);
+      double y = sin(2 * M_PI * r1) * sqrt(1 - r2);
+      double z = sqrt(r2);
+
+      double N_x = N[0];
+      double N_y = N[1];
+      double N_z = N[2];
+
+      Vector T1;
+      if (std::abs(N_x)<= std::abs(N_y) && std::abs(N_x) <= std::abs(N_z)) {
+        T1 = Vector(0, -N_z, N_y);
+      } else if (std::abs(N_y)<= std::abs(N_x) && std::abs(N_y) <= std::abs(N_z)) {
+        T1 = Vector(-N_z, 0, N_x);
+      } else {
+        T1 = Vector(-N_y, N_x, 0);
+      }
+      T1.normalize();
+
+      Vector T2 = cross(N, T1);
+      Vector w = x * T1 + y * T2 + z * N; // random direction sampling
+
+      Ray indir_ray(P2, w);
+      Vector radiance = getColor(indir_ray, recursion_depth + 1);
+      Vector indir(objects[object_id]->albedo[0] * radiance[0], objects[object_id]->albedo[1] * radiance[1], objects[object_id]->albedo[2] * radiance[2]);
+
+      return dir + indir;
     }
 
     return Vector(0, 0, 0);
@@ -244,6 +275,7 @@ public:
 int main() {
   int W = 512;
   int H = 512;
+  int N = 30;
 
   for (int i = 0; i < 32; i++) {
     engine[i].seed(i);
@@ -279,23 +311,28 @@ int main() {
 #pragma omp parallel for schedule(dynamic, 1)
   for (int i = 0; i < H; i++) {
     for (int j = 0; j < W; j++) {
-      Vector color;
-
       // TODO (lab 1) : correct ray_direction so that it goes through each pixel
       // (j, i)
-      Vector ray_direction(j - W / 2 + 0.5, H / 2 - i - 0.5,
-                           -W / (2 * tan(scene.fov / 2)));
-      ray_direction.normalize();
-
-      Ray ray(scene.camera_center, ray_direction);
-
       // TODO (lab 2) : add Monte Carlo / averaging of random ray contributions
       // here
       // TODO (lab 2) : add antialiasing by altering the ray_direction here
       // TODO (lab 2) : add depth of field effect by altering the ray origin
       // (and direction) here
+      Vector sum_color(0,0,0);
+      for (int k = 0; k < N; k++) {
+        double r1 = uniform(engine[0]);
+        double r2 = uniform(engine[0]);
+        double sigma = 0.5;
 
-      color = scene.getColor(ray, 0);
+        Vector ray_direction(j - W / 2 + 0.5 + sigma * sqrt(-2 * log(r1)) * cos(2 * M_PI * r2), H / 2 - i - 0.5 + sigma * sqrt(-2 * log(r1)) * sin(2 * M_PI * r2),
+                             -W / (2 * tan(scene.fov / 2)));
+        ray_direction.normalize();
+
+        Ray ray(scene.camera_center, ray_direction);
+        sum_color = sum_color + scene.getColor(ray, 0);
+      }
+
+      Vector color = sum_color / N;
 
       image[(i * W + j) * 3 + 0] = std::min(
           255.,
