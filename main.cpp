@@ -140,6 +140,12 @@ public:
 	int group;  // face group
 };
 
+struct BVH_node {
+	Vector b_min, b_max;
+	int start_index, end_index;
+	int left, right;
+};
+
 // Class only used in labs 3 and 4 
 class TriangleMesh : public Object {
 public:
@@ -150,12 +156,20 @@ public:
 		for (int i = 0; i < vertices.size(); i++) {
 			vertices[i] = vertices[i] * s + t;
 		}
+    nodes.clear();
+    if (indices.empty()){ 
+      return;
+    }
+    nodes.push_back(BVH_node());
+    build_BVH(0, 0, indices.size());
 	}
 
 	// read an .obj file
 	void readOBJ(const char* obj) {
 		std::ifstream f(obj);
-		if (!f) return;
+		if (!f){
+      return;
+    }
 
 		std::map<std::string, int> mtls;
 		int curGroup = -1, maxGroup = -1;
@@ -268,14 +282,167 @@ public:
 			}
 		}
 	}
-	
 
-	// TODO ray-mesh intersection (labs 3 and 4)
+
+void build_BVH(int node_idx, int start, int end) {
+
+  nodes[node_idx].start_index = start;
+  nodes[node_idx].end_index = end;
+
+  nodes[node_idx].left = -1;
+  nodes[node_idx].right = -1;
+
+  nodes[node_idx].b_min = Vector(std::numeric_limits<double>::max(), std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
+  nodes[node_idx].b_max = Vector(-std::numeric_limits<double>::max(), -std::numeric_limits<double>::max(), -std::numeric_limits<double>::max());
+
+  for (int i = start; i < end; i++) {
+    for (int v = 0; v < 3; v++) {
+      Vector vtx = vertices[indices[i].vtx[v]];
+      if (vtx[0] < nodes[node_idx].b_min[0]) nodes[node_idx].b_min[0] = vtx[0];
+      if (vtx[1] < nodes[node_idx].b_min[1]) nodes[node_idx].b_min[1] = vtx[1];
+      if (vtx[2] < nodes[node_idx].b_min[2]) nodes[node_idx].b_min[2] = vtx[2];
+
+      if (vtx[0] > nodes[node_idx].b_max[0]) nodes[node_idx].b_max[0] = vtx[0];
+      if (vtx[1] > nodes[node_idx].b_max[1]) nodes[node_idx].b_max[1] = vtx[1];
+      if (vtx[2] > nodes[node_idx].b_max[2]) nodes[node_idx].b_max[2] = vtx[2];
+     }
+  }
+
+  if (end - start <= 4){ 
+    return;
+  }
+
+  // Helped by Louis Legrain on the logic around axis
+  int ax = 0;
+  double e0 = nodes[node_idx].b_max[0] - nodes[node_idx].b_min[0];
+  double e1 = nodes[node_idx].b_max[1] - nodes[node_idx].b_min[1];
+  double e2 = nodes[node_idx].b_max[2] - nodes[node_idx].b_min[2];
+
+  if (e1 > e0 && e1 > e2){ 
+    ax = 1;
+  }
+
+  if (e2 > e0 && e2 > e1){
+    ax = 2;
+  }
+
+  double m = (nodes[node_idx].b_min[ax] + nodes[node_idx].b_max[ax]) / 2;
+
+  int p = start;
+  for (int i = start; i < end; i++) {
+   double center = (vertices[indices[i].vtx[0]][ax] + vertices[indices[i].vtx[1]][ax] + vertices[indices[i].vtx[2]][ax]) / 3.0;
+   if (center < m) {
+    std::swap(indices[i], indices[p]);
+    p++;
+   }
+  }
+  
+  if (p == start || p == end){
+    p = start + (end - start) / 2;
+  } 
+
+  nodes.push_back(BVH_node());
+  nodes.push_back(BVH_node());
+
+  int l = nodes.size() - 2;
+  int r = nodes.size() - 1;
+
+  nodes[node_idx].left =  l;
+  nodes[node_idx].right = r;
+
+  build_BVH(l, start, p);
+  build_BVH(r, p, end);
+ }
+	
+  void build_BVH() {
+    nodes.clear();
+    if (indices.empty()){
+      return;
+    }
+    nodes.push_back(BVH_node());
+    build_BVH(0, 0, indices.size());
+  }
+
+
+  bool BVH_intersect(const Ray& ray, Vector& P, double& t, Vector& N, int node_idx) const {
+    Vector t_min;
+    Vector t_max;
+    for (int i=0; i < 3; i++){
+      t_min[i] = (nodes[node_idx].b_min[i] - ray.O[i]) / ray.u[i];
+      t_max[i] = (nodes[node_idx].b_max[i] - ray.O[i]) / ray.u[i];
+      if (t_min[i] > t_max[i]) {
+        std::swap(t_min[i], t_max[i]);
+      }
+    }
+
+    double bt_min = std::max(t_min[0], std::max(t_min[1], t_min[2]));
+    double bt_max = std::min(t_max[0], std::min(t_max[1], t_max[2]));
+
+    if (bt_max < bt_min){
+      return false;
+    } 
+    if (bt_max < 0){
+      return false; 
+    }
+
+    // if leaf node, test triangles
+    if (nodes[node_idx].left == -1) {
+      bool b = false;
+      for (int i = nodes[node_idx].start_index; i < nodes[node_idx].end_index; i++) {
+        
+        Vector A = vertices[indices[i].vtx[0]];
+        Vector B = vertices[indices[i].vtx[1]];
+        Vector C = vertices[indices[i].vtx[2]];
+
+        Vector e1 = B - A;
+        Vector e2 = C - A;
+        Vector N_temp = cross(e1, e2);
+        Vector v = cross(A - ray.O, ray.u);
+        double d = dot(ray.u, N_temp);
+
+        double beta = dot(e2, v) / d;
+        if (beta < 0 || beta > 1) continue;    // advised by Prof.
+        double gamma = -dot(e1, v) / d;
+        if (gamma < 0 || gamma > 1) continue;  // advised by Prof. 
+        double alpha = 1 - beta - gamma;
+        if (alpha < 0) continue;               // advised by Prof. 
+
+        double t_temp = dot(A - ray.O, N_temp) / d;
+        if (t_temp >= 0 && t_temp < t) {
+          t = t_temp;
+          P = ray.O + t * ray.u;
+          N = N_temp;
+          N.normalize();
+          b = true;
+        }
+      }
+      return b;
+    }
+
+    // recurse into children
+    bool b_l = BVH_intersect(ray, P, t, N, nodes[node_idx].left);
+    bool b_r = BVH_intersect(ray, P, t, N, nodes[node_idx].right);
+    return b_l || b_r;
+  }
+
+  // Lab 4
+	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
+    if (nodes.empty()) {
+      return false;
+    }
+    t = std::numeric_limits<double>::max();
+    return BVH_intersect(ray, P, t, N, 0);
+	} 
+
+	/* 
+  Lab 3 
+
+  // TODO ray-mesh intersection (labs 3 and 4)
 	bool intersect(const Ray& ray, Vector& P, double& t, Vector& N) const {
     // lab 3 : once done, speed it up by first checking against the mesh bounding box
     Vector b_min(std::numeric_limits<double>::max(), std::numeric_limits<double>::max(), std::numeric_limits<double>::max()); 
-    Vector b_max(std::numeric_limits<double>::min(), std::numeric_limits<double>::min(), std::numeric_limits<double>::min()); 
-    for (int i = 1; i < vertices.size(); i++) {
+    Vector b_max(-std::numeric_limits<double>::max(), -std::numeric_limits<double>::max(), -std::numeric_limits<double>::max()); 
+    for (int i = 0; i < vertices.size(); i++) {
       if (vertices[i][0] < b_min[0]) b_min[0] = vertices[i][0];
       if (vertices[i][1] < b_min[1]) b_min[1] = vertices[i][1];
       if (vertices[i][2] < b_min[2]) b_min[2] = vertices[i][2];
@@ -301,7 +468,11 @@ public:
     if (bt_max < bt_min){
       return false;
     } 
-		
+    if (bt_max < 0){
+      return false; 
+    }
+
+  
 		// lab 3 : for each triangle, compute the ray-triangle intersection with Moller-Trumbore algorithm
     double min_t = std::numeric_limits<double>::max();
     bool b = false;
@@ -314,11 +485,15 @@ public:
       Vector e2 = C - A;
       Vector N_temp = cross(e1, e2);
       Vector v = cross(A - ray.O, ray.u);
-      double d = dot(ray.u, N);
+      double d = dot(ray.u, N_temp);
 
       double beta = dot(e2, v) / d;
+      if (beta < 0 || beta > 1) continue;  
       double gamma = -dot(e1, v) / d;
-      double alpha = 1. - beta - gamma;
+      if (gamma < 0 || gamma > 1) continue; 
+      double alpha = 1 - beta - gamma;
+      if (alpha < 0) continue;              
+
       double t_temp = dot(A - ray.O, N_temp) / d;
 
       if (alpha >= 0 && beta >= 0 && gamma >= 0 && t_temp >= 0 && t_temp < min_t) {
@@ -332,7 +507,7 @@ public:
 		}
 		// lab 4 : recursively apply the bounding-box test from a BVH datastructure
 		return b;
-	}
+	} */
 
 
 	std::vector<TriangleIndices> indices;
@@ -340,6 +515,7 @@ public:
 	std::vector<Vector> normals;
 	std::vector<Vector> uvs;
 	std::vector<Vector> vertexcolors;
+  std::vector<BVH_node> nodes;
 };
 
 class Scene {
@@ -503,10 +679,10 @@ int main() {
   Scene scene;
   scene.camera_center = Vector(0, 0, 55);
   scene.light_position = Vector(-10, 20, 40);
-  scene.light_intensity = 3E7;
+  scene.light_intensity = 1.5E7;
   scene.fov = 60 * M_PI / 180.;
   scene.gamma = 2.2; // TODO (lab 1) : play with gamma ; typically, gamma = 2.2
-  scene.max_light_bounce = 5;
+  scene.max_light_bounce = 4;
 
   
   // scene.addObject(&center_sphere);
